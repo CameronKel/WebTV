@@ -6,11 +6,10 @@ A tiny Apple TV app that opens one website full screen and lets you drive it wit
 
 | Remote | What it does |
 | --- | --- |
-| Swipe on touch surface | Move the cursor. Push against a screen edge to scroll. |
-| Click | Click whatever is under the cursor. Text boxes open the on-screen keyboard. |
-| D-pad / edge clicks | Scroll up, down, left, right |
+| D-pad or swipe | Move the white highlight to the next link or button in that direction (scrolls the page when there's nothing further) |
+| Click / Select | Open the highlighted item. Text boxes open the on-screen keyboard. |
+| Play/Pause | Play or pause the video on the page; with no video, go back to the home page |
 | Menu / Back | Browser back. Exits the app when there's nothing to go back to. |
-| Play/Pause | Go back to the home page (also retries after an error) |
 
 ## 1. Set your website
 

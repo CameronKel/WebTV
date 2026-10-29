@@ -1,17 +1,14 @@
 import UIKit
 
-/// Full-screen web page driven by the Siri Remote:
-///   swipe touch surface  -> move cursor (pushing against an edge scrolls)
-///   click                -> click whatever is under the cursor
-///   d-pad / arrows       -> scroll a page-ish chunk
-///   Menu / Back          -> browser back (exits the app when there's no history)
-///   Play/Pause           -> reload the home page
+/// Full-screen web page driven like a normal TV app:
+///   D-pad / swipe   -> move a highlight between links and buttons
+///   Select (click)  -> activate the highlighted item
+///   Play/Pause      -> play/pause the page's video, or go home if there isn't one
+///   Menu / Back     -> browser back (exits the app when there's no history)
 final class WebViewController: UIViewController {
     private var web: LegacyWebView?
-    private let cursor = UIView()
     private let messageLabel = UILabel()
-    private var cursorPosition = CGPoint.zero
-    private var hideCursorWork: DispatchWorkItem?
+    private var swipeAccumulated = CGPoint.zero
     private var swallowMenuEnd = false
 
     private let handledPresses: Set<UIPress.PressType> = [
@@ -39,92 +36,48 @@ final class WebViewController: UIViewController {
             self?.showMessage("Couldn't load the page.\n\(error.localizedDescription)\n\nPress Play/Pause to try again.")
         }
 
-        setUpCursor()
-
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
         pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
         view.addGestureRecognizer(pan)
 
         web.load(Config.homeURL)
     }
 
-    // MARK: - Cursor
-
-    private func setUpCursor() {
-        let size: CGFloat = 30
-        cursor.frame = CGRect(x: 0, y: 0, width: size, height: size)
-        cursor.backgroundColor = UIColor.white.withAlphaComponent(0.85)
-        cursor.layer.cornerRadius = size / 2
-        cursor.layer.borderColor = UIColor.black.withAlphaComponent(0.6).cgColor
-        cursor.layer.borderWidth = 2
-        cursor.layer.shadowColor = UIColor.black.cgColor
-        cursor.layer.shadowOpacity = 0.5
-        cursor.layer.shadowRadius = 6
-        cursor.isUserInteractionEnabled = false
-        view.addSubview(cursor)
-
-        cursorPosition = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        cursor.center = cursorPosition
-        showCursor()
-    }
-
-    private func showCursor() {
-        cursor.alpha = 1
-        hideCursorWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            UIView.animate(withDuration: 0.4) { self?.cursor.alpha = 0 }
-        }
-        hideCursorWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Config.cursorHideDelay, execute: work)
-    }
-
-    @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
-        let t = pan.translation(in: view)
-        pan.setTranslation(.zero, in: view)
-        moveCursor(dx: t.x * Config.cursorSpeed, dy: t.y * Config.cursorSpeed)
-    }
-
-    private func moveCursor(dx: CGFloat, dy: CGFloat) {
-        let bounds = view.bounds
-        let target = CGPoint(x: cursorPosition.x + dx, y: cursorPosition.y + dy)
-        cursorPosition = CGPoint(x: min(max(target.x, 0), bounds.maxX),
-                                 y: min(max(target.y, 0), bounds.maxY))
-        cursor.center = cursorPosition
-        showCursor()
-
-        // Whatever didn't fit on screen becomes a scroll.
-        let overflowX = target.x - cursorPosition.x
-        let overflowY = target.y - cursorPosition.y
-        if overflowX != 0 || overflowY != 0 {
-            scroll(dx: overflowX * 2, dy: overflowY * 2)
-        }
-    }
-
     // MARK: - Page actions
 
+    @discardableResult
     private func runPage(_ call: String) -> String {
         web?.evaluate(PageScript.prelude + call) ?? ""
     }
 
-    private func click() {
-        UIView.animate(withDuration: 0.08, animations: {
-            self.cursor.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
-        }, completion: { _ in
-            UIView.animate(withDuration: 0.08) { self.cursor.transform = .identity }
-        })
-        showCursor()
+    private func move(_ direction: String) {
+        runPage("window.__atv.move('\(direction)')")
+    }
 
-        let p = cursorPosition
-        let result = runPage("window.__atv.click(\(p.x),\(p.y),\(view.bounds.width))")
+    private func activate() {
+        let result = runPage("window.__atv.activate()")
         if let data = result.data(using: .utf8),
            let field = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             promptForText(field)
         }
     }
 
-    private func scroll(dx: CGFloat, dy: CGFloat) {
-        let p = cursorPosition
-        _ = runPage("window.__atv.scroll(\(p.x),\(p.y),\(dx),\(dy),\(view.bounds.width))")
+    /// Swipes on the touch surface step the highlight, like the tvOS focus engine.
+    @objc private func handleSwipe(_ pan: UIPanGestureRecognizer) {
+        if pan.state == .began { swipeAccumulated = .zero }
+        let t = pan.translation(in: view)
+        pan.setTranslation(.zero, in: view)
+        swipeAccumulated.x += t.x
+        swipeAccumulated.y += t.y
+
+        let step = Config.swipeStep
+        if abs(swipeAccumulated.x) >= step, abs(swipeAccumulated.x) > abs(swipeAccumulated.y) {
+            move(swipeAccumulated.x > 0 ? "right" : "left")
+            swipeAccumulated = .zero
+        } else if abs(swipeAccumulated.y) >= step {
+            move(swipeAccumulated.y > 0 ? "down" : "up")
+            swipeAccumulated = .zero
+        }
     }
 
     /// The remote has no keyboard, so text fields get the system text-entry screen.
@@ -139,7 +92,7 @@ final class WebViewController: UIViewController {
             let text = alert?.textFields?.first?.text ?? ""
             guard let args = try? JSONSerialization.data(withJSONObject: [text, go]),
                   let argsJS = String(data: args, encoding: .utf8) else { return }
-            _ = self?.runPage("window.__atv.setText.apply(window.__atv,\(argsJS))")
+            self?.runPage("window.__atv.setText.apply(window.__atv,\(argsJS))")
         }
         alert.addAction(UIAlertAction(title: "Done & Go", style: .default) { _ in submit(true) })
         alert.addAction(UIAlertAction(title: "Done", style: .default) { _ in submit(false) })
@@ -151,17 +104,17 @@ final class WebViewController: UIViewController {
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var passOn = Set<UIPress>()
-        let page = view.bounds.height * 0.6
         for press in presses {
             switch press.type {
-            case .select: click()
-            case .playPause: web?.load(Config.homeURL)
-            case .upArrow: scroll(dx: 0, dy: -page)
-            case .downArrow: scroll(dx: 0, dy: page)
-            case .leftArrow: scroll(dx: -page, dy: 0)
-            case .rightArrow: scroll(dx: page, dy: 0)
-            case .pageUp: scroll(dx: 0, dy: -view.bounds.height * 0.9)
-            case .pageDown: scroll(dx: 0, dy: view.bounds.height * 0.9)
+            case .select: activate()
+            case .upArrow: move("up")
+            case .downArrow: move("down")
+            case .leftArrow: move("left")
+            case .rightArrow: move("right")
+            case .pageUp: runPage("window.__atv.scrollPage('up',0.9)")
+            case .pageDown: runPage("window.__atv.scrollPage('down',0.9)")
+            case .playPause:
+                if runPage("window.__atv.playPause()").isEmpty { web?.load(Config.homeURL) }
             case .menu:
                 if let web = web, web.canGoBack {
                     web.goBack()
@@ -218,15 +171,74 @@ final class WebViewController: UIViewController {
     }
 }
 
-/// JavaScript helpers injected into whatever page is loaded.
-/// Coordinates come in as screen points; `W` is the screen width in points,
-/// which lets us convert to the page's CSS pixels however it's been scaled.
+/// JavaScript injected into whatever page is loaded. It keeps track of the
+/// highlighted element, draws a ring around it, and picks the next element
+/// in a given direction by on-screen geometry.
 private enum PageScript {
     static let prelude = """
     if(!window.__atv){window.__atv={
-     ratio:function(W){return (document.documentElement.clientWidth||window.innerWidth)/W;},
-     click:function(x,y,W){
-      var r=this.ratio(W),cx=x*r,cy=y*r,e=document.elementFromPoint(cx,cy);if(!e)return '';
+     sel:'a[href],button,input,select,textarea,summary,video,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],[onclick],[tabindex]:not([tabindex="-1"])',
+     items:function(){
+      var out=[],seen={},els=document.querySelectorAll(this.sel);
+      for(var i=0;i<els.length;i++){
+       var e=els[i];if(e.disabled||e.closest('[aria-hidden=true]'))continue;
+       var r=e.getBoundingClientRect();if(r.width<4||r.height<4)continue;
+       var s=getComputedStyle(e);if(s.visibility==='hidden'||s.opacity==='0')continue;
+       var k=Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width)+','+Math.round(r.height);
+       if(seen[k])continue;seen[k]=1;out.push({e:e,r:r});
+      }
+      return out;
+     },
+     move:function(dir){
+      var list=this.items(),cur=this.cur,vh=window.innerHeight,cr=null;
+      if(cur&&document.contains(cur)){cr=cur.getBoundingClientRect();if(cr.bottom<0||cr.top>vh)cr=null;}
+      if(!cr){
+       var first=null;
+       for(var i=0;i<list.length;i++){var c=list[i];
+        if(c.r.bottom>0&&c.r.top<vh&&(!first||c.r.top<first.r.top-4||(Math.abs(c.r.top-first.r.top)<=4&&c.r.left<first.r.left)))first=c;}
+       if(first)this.focus(first.e);else this.scrollPage(dir);
+       return;
+      }
+      var cx=(cr.left+cr.right)/2,cy=(cr.top+cr.bottom)/2,best=null,bestScore=1e9,h=dir==='left'||dir==='right';
+      for(var i=0;i<list.length;i++){
+       var c=list[i],r=c.r;if(c.e===cur||cur.contains(c.e)||c.e.contains(cur))continue;
+       var x=(r.left+r.right)/2,y=(r.top+r.bottom)/2,main,side;
+       if(dir==='right'){if(x-cx<10||r.left<=cr.left)continue;main=Math.max(0,r.left-cr.right);}
+       else if(dir==='left'){if(cx-x<10||r.right>=cr.right)continue;main=Math.max(0,cr.left-r.right);}
+       else if(dir==='down'){if(y-cy<10||r.top<=cr.top)continue;main=Math.max(0,r.top-cr.bottom);}
+       else{if(cy-y<10||r.bottom>=cr.bottom)continue;main=Math.max(0,cr.top-r.bottom);}
+       if(h){side=(r.top<cr.bottom&&r.bottom>cr.top)?0:Math.abs(y-cy);}
+       else{side=(r.left<cr.right&&r.right>cr.left)?0:Math.abs(x-cx);}
+       var score=main+side*3;if(score<bestScore){bestScore=score;best=c;}
+      }
+      if(best)this.focus(best.e);else this.scrollPage(dir);
+     },
+     focus:function(e){
+      this.cur=e;
+      var r=e.getBoundingClientRect(),vh=window.innerHeight,vw=window.innerWidth;
+      if(r.top<60||r.bottom>vh-60||r.left<0||r.right>vw){
+       try{e.scrollIntoView({block:'center',inline:'nearest'});}catch(_){e.scrollIntoView();}
+      }
+      var o={bubbles:true,view:window};
+      e.dispatchEvent(new MouseEvent('mouseover',o));e.dispatchEvent(new MouseEvent('mouseenter',{view:window}));
+      try{e.focus({preventScroll:true});}catch(_){}
+      this.ring();
+     },
+     ring:function(){
+      var d=this.box;
+      if(!d||!document.body.contains(d)){
+       d=this.box=document.createElement('div');
+       d.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:4px solid #fff;border-radius:10px;box-shadow:0 0 0 3px rgba(0,0,0,.6),0 0 28px rgba(255,255,255,.55);transition:all .12s ease-out';
+       document.body.appendChild(d);
+      }
+      var e=this.cur;if(!e||!document.contains(e)){d.style.display='none';return;}
+      var r=e.getBoundingClientRect();
+      d.style.display='block';d.style.left=(r.left-6)+'px';d.style.top=(r.top-6)+'px';
+      d.style.width=(r.width+12)+'px';d.style.height=(r.height+12)+'px';
+     },
+     activate:function(){
+      var e=this.cur;if(!e||!document.contains(e))return '';
+      var r=e.getBoundingClientRect(),cx=(r.left+r.right)/2,cy=(r.top+r.bottom)/2;
       var t=e.closest('textarea,input,[contenteditable]');
       if(t&&!t.disabled&&!t.readOnly&&(t.tagName==='TEXTAREA'||t.isContentEditable||
          (t.tagName==='INPUT'&&/^(text|search|email|url|password|number|tel)$/.test(t.type)))){
@@ -234,17 +246,25 @@ private enum PageScript {
        return JSON.stringify({secure:t.type==='password',value:t.isContentEditable?t.innerText:t.value,
         label:t.getAttribute('aria-label')||t.placeholder||t.name||''});
       }
+      if(e.tagName==='VIDEO'){this.playPause(e);return '';}
       var a=e.closest('a[target]');if(a)a.target='_self';
       var o={bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy};
       function fire(n,C){if(C)e.dispatchEvent(new C(n,o));}
       fire('pointerdown',window.PointerEvent);fire('mousedown',MouseEvent);
       fire('pointerup',window.PointerEvent);fire('mouseup',MouseEvent);fire('click',MouseEvent);
-      if(e.focus)e.focus();
+      var self=this;setTimeout(function(){self.ring();},300);
       return '';
      },
-     scroll:function(x,y,dx,dy,W){
-      var r=this.ratio(W);dx*=r;dy*=r;
-      for(var e=document.elementFromPoint(x*r,y*r);e&&e!==document.body&&e!==document.documentElement;e=e.parentElement){
+     playPause:function(v){
+      v=v||document.querySelector('video');if(!v)return '';
+      if(v.paused){v.play();}else{v.pause();}
+      return 'ok';
+     },
+     scrollPage:function(dir,f){
+      f=f||0.6;var dx=0,dy=0;
+      if(dir==='up')dy=-window.innerHeight*f;else if(dir==='down')dy=window.innerHeight*f;
+      else if(dir==='left')dx=-window.innerWidth*f;else dx=window.innerWidth*f;
+      for(var e=document.elementFromPoint(window.innerWidth/2,window.innerHeight/2);e&&e!==document.body&&e!==document.documentElement;e=e.parentElement){
        var c=getComputedStyle(e);
        if((dy&&e.scrollHeight>e.clientHeight&&/auto|scroll/.test(c.overflowY))||
           (dx&&e.scrollWidth>e.clientWidth&&/auto|scroll/.test(c.overflowX))){e.scrollTop+=dy;e.scrollLeft+=dx;return;}
@@ -265,7 +285,10 @@ private enum PageScript {
        if(ok&&t.form){if(t.form.requestSubmit){t.form.requestSubmit();}else{t.form.submit();}}
       }
      }
-    };window.open=function(u){if(u)location.href=u;return null;};}
+    };
+    window.addEventListener('scroll',function(){window.__atv.ring();},true);
+    window.addEventListener('resize',function(){window.__atv.ring();});
+    window.open=function(u){if(u)location.href=u;return null;};}
 
     """
 }

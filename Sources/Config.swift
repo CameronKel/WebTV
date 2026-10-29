@@ -21,12 +21,10 @@ enum Config {
     /// Pretend to be desktop Safari so sites serve their normal layout.
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
-    /// How far the cursor moves per unit of swipe on the remote's touch surface.
-    static let cursorSpeed: CGFloat = 1.6
+    /// How far you swipe on the remote's touch surface to move the highlight one step.
+    /// Smaller = more sensitive.
+    static let swipeStep: CGFloat = 180
 
     /// Stop the Apple TV screensaver from kicking in while the app is open.
     static let keepScreenAwake = true
-
-    /// Hide the cursor after this many seconds without touching the remote.
-    static let cursorHideDelay: TimeInterval = 5
 }
