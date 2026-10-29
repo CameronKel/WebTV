@@ -13,6 +13,17 @@ final class LegacyWebView {
         self.view = view
         view.setValue(true, forKey: "scalesPageToFit")
         view.setValue(delegate, forKey: "delegate")
+        // Our clicks are synthetic, so players would otherwise sit waiting for a "real" tap.
+        setIfSupported(false, "mediaPlaybackRequiresUserAction")
+        setIfSupported(true, "allowsInlineMediaPlayback")
+    }
+
+    /// Setting a key the class doesn't have would crash, so check first.
+    private func setIfSupported(_ value: Bool, _ key: String) {
+        let setter = "set" + key.prefix(1).uppercased() + key.dropFirst() + ":"
+        if view.responds(to: NSSelectorFromString(setter)) {
+            view.setValue(value, forKey: key)
+        }
     }
 
     var onFinishLoad: (() -> Void)? {
