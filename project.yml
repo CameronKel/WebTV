@@ -1,0 +1,23 @@
+# XcodeGen spec: the GitHub workflow turns this into WebTV.xcodeproj,
+# so nobody has to own a Mac to keep an Xcode project in sync.
+name: WebTV
+options:
+  deploymentTarget:
+    tvOS: "15.0"
+targets:
+  WebTV:
+    type: application
+    platform: tvOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.webtv
+        PRODUCT_NAME: WebTV
+        INFOPLIST_FILE: Support/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "3"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
